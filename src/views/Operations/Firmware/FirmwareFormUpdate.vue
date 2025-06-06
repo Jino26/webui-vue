@@ -192,6 +192,7 @@ export default {
       refreshAction = false,
       onComplete,
       getProgress,
+      showToast = true,
     }) {
       if (!this.loading) {
         this.startLoader();
@@ -202,7 +203,10 @@ export default {
       this.progressVariant = isError ? 'danger' : 'success';
 
       // Use dynamic progress if getProgress is provided, else use provided percent
-      this.progress = getProgress ? getProgress() : percent;
+      //this.progress = getProgress ? getProgress() : percent;
+      this.progress = getProgress
+        ? Math.ceil(getProgress())
+        : Math.ceil(percent);
 
       if (isError) {
         // Show error toast and stop progress
@@ -217,12 +221,14 @@ export default {
         return;
       }
 
-      // Show info toast for normal progress
-      this.infoToast(this.$t(message, { progress: this.progress }), {
-        title: this.$t(title),
-        timestamp: true,
-        ...(refreshAction && { refreshAction: true }),
-      });
+      if (showToast) {
+        // Show info toast for normal progress
+        this.infoToast(this.$t(message, { progress: this.progress }), {
+          title: this.$t(title),
+          timestamp: true,
+          ...(refreshAction && { refreshAction: true }),
+        });
+      }
 
       if (isComplete) {
         this.endLoader();
@@ -239,6 +245,7 @@ export default {
       hideAfter = false,
       height = '10px',
       onComplete = null,
+      refreshAction = false,
     } = {}) {
       const h = this.$createElement;
       const content = h('div', [
@@ -267,6 +274,7 @@ export default {
         noCloseButton: true,
         variant,
         appendToast: false,
+        ...(refreshAction && { refreshAction: true }),
       });
 
       if (hideAfter && typeof onComplete === 'function') {
@@ -277,38 +285,60 @@ export default {
       }
     },
     simulateFirmwareUpdate() {
-      this.updateProgress({
-        percent: 25,
-        title: 'pageFirmware.toast.updateFirmware.step1',
-        message: 'pageFirmware.toast.updateFirmware.step1Message',
-      });
+      this.startLoader();
+      this.progress = 0;
+      this.showProgressBar = false;
 
-      setTimeout(() => {
-        this.updateProgress({
+      const stages = [
+        {
+          percent: 25,
+          title: this.$t('pageFirmware.toast.updateFirmware.step1'),
+          message: this.$t('pageFirmware.toast.updateFirmware.step1Message'),
+        },
+        {
           percent: 50,
-          title: 'pageFirmware.toast.updateFirmware.step2',
-          message: 'pageFirmware.toast.updateFirmware.step2Message',
-        });
-      }, 2000);
-
-      setTimeout(() => {
-        this.updateProgress({
+          title: this.$t('pageFirmware.toast.updateFirmware.step2'),
+          message: this.$t('pageFirmware.toast.updateFirmware.step2Message'),
+        },
+        {
           percent: 75,
-          title: 'pageFirmware.toast.updateFirmware.step3',
-          message: 'pageFirmware.toast.updateFirmware.step3Message',
-          isError: true,
-        });
-      }, 3000);
-
-      setTimeout(() => {
-        this.updateProgress({
+          title: this.$t('pageFirmware.toast.updateFirmware.step3'),
+          message: this.$t('pageFirmware.toast.updateFirmware.step3Message'),
+        },
+        {
           percent: 100,
-          title: 'pageFirmware.toast.updateFirmware.step4',
-          message: 'pageFirmware.toast.updateFirmware.step4Message',
-          isComplete: true,
-          refreshAction: true,
+          title: this.$t('pageFirmware.toast.updateFirmware.step4'),
+          message: this.$t('pageFirmware.toast.updateFirmware.step4Message'),
+        },
+      ];
+
+      let currentStage = 0;
+
+      const updateToast = () => {
+        const stage = stages[currentStage];
+        this.progress = stage.percent;
+        const showRefreshButton = currentStage === stages.length - 1;
+
+        this.createOrUpdateProgressToast({
+          percent: stage.percent,
+          title: stage.title,
+          message: stage.message,
+          variant: 'success',
+          hideAfter: currentStage === stages.length - 1,
+          refreshAction: showRefreshButton,
+          onComplete: () => {
+            this.endLoader();
+            this.progress = 0;
+          },
         });
-      }, 4000);
+
+        currentStage++;
+        if (currentStage < stages.length) {
+          setTimeout(updateToast, 3000);
+        }
+      };
+
+      updateToast();
     },
     /*simulateFirmwareUpdate() {
       this.startLoader();
@@ -414,24 +444,21 @@ export default {
 
       // Step 1 - Upload
       const uploadFirmware = () => {
-        console.log('uploadFirmware++');
         this.updateProgress({
           percent: 25,
           title: 'pageFirmware.toast.updateFirmware.step1',
           message: 'pageFirmware.toast.updateFirmware.step1Message',
         });
-        console.log('uploadFirmware--');
         if (this.isWorkstationSelected) {
           this.dispatchWorkstationUpload(activateFirmware);
         } else {
           this.dispatchTftpUpload(activateFirmware);
         }
       };
-      console.log('Going to activate...');
+
       // Step 2 - Activation
       const activateFirmware = async (data) => {
         const taskLink = data['@odata.id'];
-        console.log('activateFirmware++');
 
         const currentTask = async () => {
           return await this.$store.dispatch('global/getCurrentTask', taskLink);
@@ -451,6 +478,17 @@ export default {
           }
 
           Promise.all([currentTask(data)]).then((res) => {
+            console.log('PercentComplete:', res[0].PercentComplete);
+
+            // Calculate mapped progress for Step 2 (25% to 50%)
+            const mappedProgress = 25 + (res[0].PercentComplete / 100) * 25;
+
+            // Update progress bar and toast
+            this.updateProgress({
+              percent: mappedProgress,
+              showToast: false,
+            });
+
             // Check to see if activation was aborted
             const activationAborted = res[0].Messages.filter((message) =>
               message.MessageId.endsWith('TaskAborted')
@@ -475,6 +513,7 @@ export default {
             // res[0].error indicates that the activation was completed and removed
             // because of BMC starting reboot
             if (res[0].PercentComplete == 100 || res[0].error) {
+              console.log('PercentComplete:', res[0].PercentComplete);
               bmcReboot();
             } else {
               setTimeout(() => {
@@ -486,18 +525,16 @@ export default {
 
         if (taskLink) {
           this.updateProgress({
-            percent: 50,
             title: 'pageFirmware.toast.updateFirmware.step2',
             message: 'pageFirmware.toast.updateFirmware.step2Message',
           });
-          console.log('activateFirmware--');
           currentTaskProgress(0, taskLink);
         } else {
           this.endLoader();
           return this.errorToast(this.$t('pageFirmware.toast.errorActivation'));
         }
       };
-      console.log('Going to BMC reboot');
+
       // Step 3 - BMC Reboot
       const bmcReboot = async () => {
         this.updateProgress({
