@@ -86,6 +86,11 @@
           {{ progress }}%
         </b-progress-bar>
       </b-progress>
+
+      <!-- Progress Text -->
+      <div v-if="showProgressBar" class="progress-text mt-2">
+        {{ progressText }}
+      </div>
     </div>
 
     <!-- Modals -->
@@ -129,6 +134,10 @@ export default {
       progress: 0, // Track progress percentage
       showProgressBar: false, // Show progress bar by default
       toastRef: null,
+      progressText: '', // New property for progress text
+      progressVariant: 'success', // Moved to data to ensure reactivity
+      startTime: null,
+      finalElapsedTime: 0,
     };
   },
   computed: {
@@ -287,7 +296,8 @@ export default {
     simulateFirmwareUpdate() {
       this.startLoader();
       this.progress = 0;
-      this.showProgressBar = false;
+      this.showProgressBar = true; // Show progress bar
+      this.startTime = Date.now(); // Record start time
 
       const stages = [
         {
@@ -314,9 +324,23 @@ export default {
 
       let currentStage = 0;
 
+      const formatElapsedTime = (milliseconds) => {
+        const seconds = Math.floor(milliseconds / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const remainingSeconds = seconds % 60;
+        return `${minutes}m ${remainingSeconds}s`;
+      };
+
       const updateToast = () => {
         const stage = stages[currentStage];
         this.progress = stage.percent;
+
+        // Calculate elapsed time
+        const elapsedTime = Date.now() - this.startTime;
+        this.progressText = `Update starting... (Elapsed time: ${formatElapsedTime(
+          elapsedTime
+        )})`;
+
         const showRefreshButton = currentStage === stages.length - 1;
 
         this.createOrUpdateProgressToast({
@@ -329,6 +353,9 @@ export default {
           onComplete: () => {
             this.endLoader();
             this.progress = 0;
+            this.progressText = ''; // Clear progress text
+            this.showProgressBar = false; // Hide progress bar
+            this.startTime = null; // Reset start time
           },
         });
 
@@ -441,6 +468,32 @@ export default {
     updateFirmware() {
       this.startLoader();
       this.$emit('loadingStatus', this.loading);
+      this.startTime = Date.now();
+
+      let progressTextInterval = null;
+
+      const formatElapsedTime = (milliseconds) => {
+        const totalSeconds = Math.floor(milliseconds / 1000);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+
+        // Use padStart to add leading zeros if the number is a single digit
+        const formattedMinutes = String(minutes).padStart(2, '0');
+        const formattedSeconds = String(seconds).padStart(2, '0');
+
+        return `${formattedMinutes}m ${formattedSeconds}s`;
+      };
+
+      // Function to update only the progress text
+      const updateElapsedTimeText = () => {
+        const elapsedTime = Date.now() - this.startTime;
+        this.progressText = `Update started... (Elapsed time: ${formatElapsedTime(
+          elapsedTime
+        )})`;
+      };
+
+      // Start the interval for updating elapsed time text
+      progressTextInterval = setInterval(updateElapsedTimeText, 1000); // Update every 1 second
 
       // Step 1 - Upload
       const uploadFirmware = () => {
@@ -531,6 +584,8 @@ export default {
           currentTaskProgress(0, taskLink);
         } else {
           this.endLoader();
+          clearInterval(progressTextInterval);
+          this.startTime = null;
           return this.errorToast(this.$t('pageFirmware.toast.errorActivation'));
         }
       };
@@ -565,6 +620,8 @@ export default {
 
       // Step 4 - Activation complete
       const activationComplete = () => {
+        this.finalElapsedTime = Date.now() - this.startTime;
+
         this.endLoader();
         this.updateProgress({
           percent: 100,
@@ -572,6 +629,14 @@ export default {
           message: 'pageFirmware.toast.updateFirmware.step4Message',
           isComplete: true,
           refreshAction: true,
+          onComplete: () => {
+            // This onComplete runs when the final toast hides
+            this.startTime = null; // Reset start time
+            clearInterval(progressTextInterval); // Stop the elapsed time interval
+            this.progressText = `Update finished. (Time taken: ${formatElapsedTime(
+              this.finalElapsedTime
+            )})`;
+          },
         });
       };
 
